@@ -1,5 +1,6 @@
 import ClientView from './client';
 import BonusView from './bonus';
+import ConfigView from './functions';
 
 /**
  * Отвечает за общую логику приложения,
@@ -14,35 +15,50 @@ export default class LoyaltyApp extends React.Component {
             clientGroups: [], // Группы клиентов в Poster
             currentClient: null,
             currentOrder: null,
+            templates: [],
+            currentTemplateIdx: 0,
         };
     }
 
     componentDidMount() {
         // Показываем кнопки в интерфейсе Poster
         Poster.interface.showApplicationIconAt({
-            order: 'Rocket App',
+            order: 'Электронная карта',
+            functions: 'U-CARD настройки',
+            // payment: 'U-CARD | списание',
         });
 
         // Подписываемся на ивенты Poster
-        Poster.on('applicationIconClicked', this.showPopup);
+        // Poster.on('applicationIconClicked', this.showPopup);
+        Poster.on('applicationIconClicked', (data) => {
+            this.showPopup(data);
+            // if (data.place === 'functions') {
+            //     this.showPopup({place: 'functions'});
+            // }
+            //
+            // if (data.place === 'order') {
+            //     this.showPopup({place: 'order'});
+            // }
+        });
         Poster.on('beforeOrderClose', (data, next) => {
             // Сохранили callback чтобы закрыть заказ
             this.next = next;
-            this.showPopup({ place: 'beforeOrderClose' });
+            this.showPopup({place: 'beforeOrderClose'});
         });
 
         this.getClientsGroups();
+        this.getTemplates();
     }
 
     /**
      * Получает группы клиентов из Poster
      */
     getClientsGroups = () => {
-        Poster.makeApiRequest('clients.getGroups', { method: 'get' }, (groups) => {
+        Poster.makeApiRequest('clients.getGroups', {method: 'get'}, (groups) => {
             if (groups) {
                 // Не показываем удаленные группы
                 groups = _.filter(groups, g => parseInt(g.delete) === 0);
-                this.setState({ clientGroups: groups });
+                this.setState({clientGroups: groups});
             }
         });
     };
@@ -62,7 +78,7 @@ export default class LoyaltyApp extends React.Component {
                 }
                 return null;
             })
-            .then(client => ({ order: activeOrder, client }));
+            .then(client => ({order: activeOrder, client}));
     };
 
     /**
@@ -74,7 +90,7 @@ export default class LoyaltyApp extends React.Component {
         // TODO: в этом методе можно
 
         Poster.clients
-            .find({ searchVal: newClient.phone })
+            .find({searchVal: newClient.phone})
             .then((result) => {
                 // Если нашли хоть одного клиента, добавляем к заказу
                 if (result && result.foundClients && result.foundClients.length) {
@@ -88,13 +104,13 @@ export default class LoyaltyApp extends React.Component {
                         client_name: newClient.name,
                         phone: newClient.phone,
                         client_groups_id_client: newClient.groupId,
-                        bonus: 2000,
+                        bonus: 0,
                     },
                 });
             })
             .then((client) => {
                 // Отобразили клиента
-                this.setState({ currentOrder: order, currentClient: client });
+                this.setState({currentOrder: order, currentClient: client});
 
                 // Привязали к заказу
                 Poster.orders.setOrderClient(order.id, client.id);
@@ -109,7 +125,7 @@ export default class LoyaltyApp extends React.Component {
      * @param bonus
      */
     withdrawBonus = (bonus) => {
-        const { currentOrder } = this.state;
+        const {currentOrder} = this.state;
 
         bonus = parseFloat(bonus);
 
@@ -125,28 +141,33 @@ export default class LoyaltyApp extends React.Component {
      * @param data
      */
     showPopup = (data) => {
+        if (data.place === 'functions') {
+            this.setState({place: 'functions'});
+            Poster.interface.popup({width: 600, height: 400, title: 'Настройки приложения'});
+        }
+
         if (data.place === 'order') {
             this.getCurrentClient()
                 .then((info) => {
-                    this.setState({ currentClient: info.client, currentOrder: data.order, place: 'order' });
+                    this.setState({currentClient: info.client, currentOrder: data.order, place: 'order'});
 
-                    Poster.interface.popup({ width: 600, height: 400, title: 'Клиент интеграции' });
+                    Poster.interface.popup({width: 600, height: 400, title: 'Карта лояльности'});
                 });
         }
 
         if (data.place === 'beforeOrderClose') {
             this.getCurrentClient()
                 .then((info) => {
-                    if (info.client) {
+                    if (info.client && info.client.bonus > 0) {
                         this.setState({
                             currentClient: info.client,
                             currentOrder: info.order,
                             place: 'beforeOrderClose',
                         });
 
-                        Poster.interface.popup({ width: 500, height: 300, title: 'Списание бонусов' });
+                        Poster.interface.popup({width: 500, height: 300, title: 'Списание бонусов'});
                     } else {
-                        // Если не нашли клиента, продолжаем поток выполнения в Poster
+                        // Если не нашли клиента или у него нет бонусов, продолжаем поток выполнения в Poster
                         this.next();
                     }
                 });
@@ -155,10 +176,23 @@ export default class LoyaltyApp extends React.Component {
 
     render() {
         const {
-            place, clientGroups, currentClient, currentOrder,
+            place, clientGroups, currentClient, currentOrder, templates, currentTemplateIdx
         } = this.state;
 
         // В зависимости от места в котором вызвали икно интеграции отображаем разные окна
+
+        // Окно настроек
+        if (place === 'functions') {
+            return (
+                <ConfigView
+                    templates={templates}
+                    currentTemplateIdx={currentTemplateIdx}
+                    setTemplate={this.setTemplate}
+                    getTemplate={this.getTemplate}
+                    api={this.apiRequest}
+                />
+            );
+        }
 
         // Окно заказа
         if (place === 'order') {
@@ -167,7 +201,10 @@ export default class LoyaltyApp extends React.Component {
                     groups={clientGroups}
                     currentClient={currentClient}
                     currentOrder={currentOrder}
-                    setCurrentClient={this.setOrderClient}
+                    api={this.apiRequest}
+                    setClient={this.setClient}
+                    addClient={this.addClient}
+                    getTemplate={this.getTemplate}
                 />
             );
         }
@@ -183,6 +220,117 @@ export default class LoyaltyApp extends React.Component {
             );
         }
 
-        return (<div />);
+        return (<div/>);
     }
+
+    /* ======================================== */
+
+    getTemplate = () => {
+        if (parseInt(this.state.currentTemplateIdx) >= 0) {
+            return this.state.templates[parseInt(this.state.currentTemplateIdx)];
+        }
+        return null;
+    };
+
+    setTemplate = (templateIdx) => {
+        if (parseInt(templateIdx) >= 0) {
+            this.setState({currentTemplateIdx: parseInt(templateIdx)});
+        }
+    };
+    /**
+     *
+     */
+    getTemplates = () => {
+        let self = this;
+        this.apiRequest('gettemplates', {}, (answer) => {
+            if (answer && Number(answer.code) === 200) {
+                let _res = JSON.parse(answer.result);
+                if (_res) {
+                    // self.setTemplate(_res.result[0]);
+                    self.setState({templates: _res.result});
+                } else {
+                    self.notify('Не найден ни один шаблон');
+                }
+            } else {
+                self.notify('Ошибка обмена данными');
+            }
+        });
+    };
+    /* ======================================== */
+    /**
+     * привязывает клиента к заказу
+     * @param client
+     */
+    setClient = (client) => {
+        // if (!this.state.currentOrder) {
+        //     let self = this;
+        //     Poster.orders.getActive()
+        //         .then(function (order) {
+        //             self.setState({currentOrder: order});
+        //             return Poster.orders.setOrderClient(this.state.currentOrder.id, client.id);
+        //         });
+        // } else {
+        return Poster.orders.setOrderClient(this.state.currentOrder.id, client.id);
+        // }
+        // Привязали к текущему заказу
+
+    };
+    /**
+     * добавляет клиента в постер
+     * @param client
+     * @returns {*}
+     */
+    addClient = (client) => {
+        let self = this;
+        return Poster.clients.create({client: client});
+    };
+    /**
+     * Отправка запросов к апи сервиса
+     * @param method
+     * @param data
+     * @param _cb
+     * @returns {*}
+     * пример
+     this.apiRequest('gettemplates', {}, (answer) => {
+            if (answer && Number(answer.code) === 200) {
+                let _res = JSON.parse(answer.result);
+                if (_res) {
+                } else {
+                    self.notify('404');
+                }
+            } else {
+                self.notify('Ошибка обмена данными');
+            }
+        });
+     */
+    apiRequest = (method, data, _cb) => {
+        if (typeof Poster.settings.extras.token !== 'string') {
+            return alert('Не установлен токен доступа, сбросьте кеш терминала!');
+        }
+        // console.log('Send to: https://u-crd.ru/oapi/v1/' + method);
+        // return Poster.makeRequest('https://u-crd.ru/poster/query', {
+        // console.log({
+        //     url: 'https://u-crd.ru/oapi/v1/' + method,
+        //     headers: [
+        //         'Content-Type: application/json',
+        //         'Accept: application/json',
+        //         'Authorization: atoken ' + Poster.settings.extras.token,
+        //     ],
+        //     method: 'post',
+        //     data: data,
+        //     dataType: "json",
+        //     timeout: 10000,
+        // });
+        return Poster.makeRequest('https://u-crd.ru/oapi/v1/' + method, {
+            headers: [
+                'Content-Type: application/json',
+                'Accept: application/json',
+                'Authorization: atoken ' + Poster.settings.extras.token,
+            ],
+            method: 'post',
+            data: data,
+            dataType: "json",
+            timeout: 10000,
+        }, (answer) => _cb(answer));
+    };
 }
